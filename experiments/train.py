@@ -6,7 +6,7 @@ import pickle
 
 import maddpg.common.tf_util as U
 from maddpg.trainer.maddpg import MADDPGAgentTrainer
-import tensorflow.contrib.layers as layers
+import tensorflow.compat.v1.layers as layers
 
 def parse_args():
     parser = argparse.ArgumentParser("Reinforcement Learning experiments for multiagent environments")
@@ -38,11 +38,17 @@ def parse_args():
 
 def mlp_model(input, num_outputs, scope, reuse=False, num_units=64, rnn_cell=None):
     # This model takes as input an observation and returns values of all actions
-    with tf.variable_scope(scope, reuse=reuse):
+    with tf.compat.v1.variable_scope(scope, reuse=reuse):
         out = input
-        out = layers.fully_connected(out, num_outputs=num_units, activation_fn=tf.nn.relu)
-        out = layers.fully_connected(out, num_outputs=num_units, activation_fn=tf.nn.relu)
-        out = layers.fully_connected(out, num_outputs=num_outputs, activation_fn=None)
+        out = layers.dense(out, units=num_units, activation=tf.compat.v1.nn.relu)
+        out = layers.dense(out, units=num_units, activation=tf.compat.v1.nn.relu)
+        out = layers.dense(out, units=num_outputs, activation=None)
+        
+        """
+        out = layers.Dense(num_units, activation=tf.nn.relu)(out)
+        out = layers.Dense(num_units, activation=tf.nn.relu)(out)
+        out = layers.Dense(num_outputs, activation=None)(out)
+        """
         return out
 
 def make_env(scenario_name, arglist, benchmark=False):
@@ -100,7 +106,7 @@ def train(arglist):
         final_ep_rewards = []  # sum of rewards for training curve
         final_ep_ag_rewards = []  # agent rewards for training curve
         agent_info = [[[]]]  # placeholder for benchmarking info
-        saver = tf.train.Saver()
+        saver = tf.compat.v1.train.Saver()
         obs_n = env.reset()
         episode_step = 0
         train_step = 0
@@ -165,7 +171,7 @@ def train(arglist):
                 U.save_state(arglist.save_dir, saver=saver)
                 # print statement depends on whether or not there are adversaries
                 if num_adversaries == 0:
-                    print("steps: {}, episodes: {}, mean episode reward: {}, time: {}".format(
+                    print("steps: {}, episodes: {}, mean episode reward: {}, time: {}".format( 
                         train_step, len(episode_rewards), np.mean(episode_rewards[-arglist.save_rate:]), round(time.time()-t_start, 3)))
                 else:
                     print("steps: {}, episodes: {}, mean episode reward: {}, agent episode reward: {}, time: {}".format(
