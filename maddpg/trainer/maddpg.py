@@ -177,15 +177,7 @@ class MADDPGAgentTrainer(AgentTrainer):
         index = self.replay_sample_index
         
         obs, act, rew, obs_next, done, emerg, mems = self.replay_buffer.sample_index(index)
-        # trick to make sure self obs, act... etc. are always at position 0 
-        obs_n.append(obs)
-        obs_next_n.append(obs_next)
-        act_n.append(act)
-        emerg_n.append(emerg)
-        mems_n.append(mems)
         for i in range(self.n):
-            if i == self.agent_index:
-                continue
             obs_i, act_i, _, obs_next_i, _, emerg_i, mems_i = agents[i].replay_buffer.sample_index(index)
             obs_n.append(obs_i)
             obs_next_n.append(obs_next_i)
@@ -196,17 +188,27 @@ class MADDPGAgentTrainer(AgentTrainer):
         # train q network
         num_sample = 1
         target_q = 0.0
-        for i in range(num_sample):
-            
-            target_act_next_mems = []
+        for i in range(num_sample):            
+            target_act_next_n = [agents[i].p_debug['target_act'](obs_next_n[i]) for i in range(self.n)] # 9*1024*(act_size)
             obs_next_mems = []
+            target_act_next_mems = []
             for t, group_members in enumerate(mems):
                 # potential performance optimization here
-                curr_obs_next_mems = [obs_next_n[i][t] for i in group_members] # 3*(obs_size)
+                curr_obs_next_mems = [obs_next_n[self.agent_index][t]]
+                curr_act_next_mems = [target_act_next_n[self.agent_index][t]] # 3*(obs_size)
+                
+                for i in group_members:
+                    if i == self.agent_index:
+                        continue
+                    curr_obs_next_mems.append(obs_next_n[i][t])
+                    curr_act_next_mems.append(target_act_next_n[i][t]) 
+
                 obs_next_mems.append(curr_obs_next_mems)
-                target_act_next_mems.append([agents[i].p_debug['target_act'](mem_obs_next[None])[0] for i,mem_obs_next in zip(group_members, curr_obs_next_mems)])
+                target_act_next_mems.append(curr_act_next_mems)
+                
             target_act_next_mems = np.swapaxes(target_act_next_mems, 0, 1)
             obs_next_mems = np.swapaxes(obs_next_mems, 0, 1)
+            
             input_list = list(obs_next_mems) + list(target_act_next_mems)
             target_q_next = self.q_debug['target_q_values'](*input_list)
             target_q += rew + self.args.gamma * (1.0 - done) * target_q_next
@@ -217,12 +219,8 @@ class MADDPGAgentTrainer(AgentTrainer):
                 # potential performance optimization here
                 target_act_next_mems.append([target_act_next_n[i][t] for i in group_members])
             """
-
-            """
+            """ ### OLD CODE ###
             target_act_next_n = [agents[i].p_debug['target_act'](obs_next_n[i]) for i in range(self.n)]
-            print(len(obs_next_n + target_act_next_n))
-            print(len(obs_next_n))
-            print(len(target_act_next_n))
             target_q_next = self.q_debug['target_q_values'](*(obs_next_n + target_act_next_n))
             target_q += rew + self.args.gamma * (1.0 - done) * target_q_next
             """

@@ -5,6 +5,8 @@ import time
 import pickle
 import copy
 
+import matplotlib.pyplot as plt
+
 import maddpg.common.tf_util as U
 from maddpg.trainer.maddpg import MADDPGAgentTrainer
 import tensorflow.compat.v1.layers as layers
@@ -27,15 +29,15 @@ def parse_args():
     # Checkpointing
     parser.add_argument("--exp-name", type=str, default=None, help="name of the experiment")
     parser.add_argument("--save-dir", type=str, default="/tmp/policy/", help="directory in which training state and model should be saved")
-    parser.add_argument("--save-rate", type=int, default=1000, help="save model once every time this many episodes are completed")
+    parser.add_argument("--save-rate", type=int, default=100, help="save model once every time this many episodes are completed")
     parser.add_argument("--load-dir", type=str, default="", help="directory in which training state and model are loaded")
     # Evaluation
     parser.add_argument("--restore", action="store_true", default=False)
     parser.add_argument("--display", action="store_true", default=False)
     parser.add_argument("--benchmark", action="store_true", default=False)
     parser.add_argument("--benchmark-iters", type=int, default=100000, help="number of iterations run for benchmarking")
-    parser.add_argument("--benchmark-dir", type=str, default="./benchmark_files/", help="directory where benchmark data is saved")
-    parser.add_argument("--plots-dir", type=str, default="./learning_curves/", help="directory where plot data is saved")
+    parser.add_argument("--benchmark-dir", type=str, default="/tmp/benchmark/", help="directory where benchmark data is saved")
+    parser.add_argument("--plots-dir", type=str, default="/tmp/plot/", help="directory where plot data is saved")
     return parser.parse_args()
 
 def mlp_model(input, num_outputs, scope, reuse=False, num_units=64, rnn_cell=None):
@@ -108,6 +110,8 @@ def train(arglist):
         agent_rewards = [[0.0] for _ in range(env.n)]  # individual agent reward
         final_ep_rewards = []  # sum of rewards for training curve
         final_ep_ag_rewards = []  # agent rewards for training curve
+        for i in range(env.n):
+            final_ep_ag_rewards.append(list())
         agent_info = [[[]]]  # placeholder for benchmarking info
         saver = tf.compat.v1.train.Saver()
         obs_n = env.reset()
@@ -115,17 +119,20 @@ def train(arglist):
         train_step = 0
         t_start = time.time()
         
-        oracle_env = make_env(arglist.scenario, arglist, arglist.benchmark)
-        oracle_env.world = make_oracle(env.world)
+        #oracle_env = make_env(arglist.scenario, arglist, arglist.benchmark)
+        #oracle_env.world = make_oracle(env.world)
         
         ###: temp
         agents_per_group = 3
-
+        
         print('Starting iterations...')
+        sorted_indices = [0,1,2,3,4,5,6,7,8]
         while True:
             # update oracle environment
-            oracle_update(env.world, oracle_env.world)
-
+            #oracle_update(env.world, oracle_env.world)
+            if len(episode_rewards) > 2000:
+                env.world.turbulence_on = True
+                env.world.roadblock_on = True
             # get action
             action_n = [agent.action(obs) for agent, obs in zip(trainers,obs_n)]
             # real environment step
@@ -135,10 +142,11 @@ def train(arglist):
             target_new_obs_n, target_rew_n, target_done_n, target_info_n = oracle_env.step(action_n)
             
             #compute emergency score with Euler distance
-            emergency_score_n = np.linalg.norm(np.array(new_obs_n) - np.array(target_new_obs_n), axis=-1)
+            #emergency_score_n = np.linalg.norm((np.array(new_obs_n) - np.array(target_new_obs_n))[:,:4], axis=-1)
 
-            sorted_indices = np.argsort(emergency_score_n)
-
+            #sorted_indices = np.argsort(emergency_score_n)
+            np.random.shuffle(sorted_indices)
+            
             num_groups = env.n // agents_per_group
             
             groups = []
@@ -151,7 +159,7 @@ def train(arglist):
             terminal = (episode_step >= arglist.max_episode_len)
 
             for pos, i in enumerate(sorted_indices):
-                trainers[i].experience(obs_n[i], action_n[i], rew_n[i], new_obs_n[i], done_n[i], terminal, emergency_score_n[i], groups[pos // agents_per_group])
+                trainers[i].experience(obs_n[i], action_n[i], rew_n[i], new_obs_n[i], done_n[i], terminal, 0, groups[pos // agents_per_group])
             
 
             """
@@ -173,6 +181,7 @@ def train(arglist):
                 for a in agent_rewards:
                     a.append(0)
                 agent_info.append([[]])
+                
 
             # increment global step counter
             train_step += 1
@@ -204,20 +213,48 @@ def train(arglist):
 
             # save model, display training output
             if terminal and (len(episode_rewards) % arglist.save_rate == 0):
+                avg_action_amount = env.action_amount / arglist.save_rate
                 U.save_state(arglist.save_dir, saver=saver)
                 # print statement depends on whether or not there are adversaries
                 if num_adversaries == 0:
-                    print("steps: {}, episodes: {}, mean episode reward: {}, time: {}".format( 
-                        train_step, len(episode_rewards), np.mean(episode_rewards[-arglist.save_rate:]), round(time.time()-t_start, 3)))
+                    print("steps: {}, episodes: {}, mean episode reward: {}, average action amount: {}, time: {}".format( 
+                        train_step, len(episode_rewards), np.mean(episode_rewards[-arglist.save_rate:]), avg_action_amount, round(time.time()-t_start, 3)))
                 else:
                     print("steps: {}, episodes: {}, mean episode reward: {}, agent episode reward: {}, time: {}".format(
                         train_step, len(episode_rewards), np.mean(episode_rewards[-arglist.save_rate:]),
                         [np.mean(rew[-arglist.save_rate:]) for rew in agent_rewards], round(time.time()-t_start, 3)))
+                env.action_amount = 0
                 t_start = time.time()
                 # Keep track of final episode reward
                 final_ep_rewards.append(np.mean(episode_rewards[-arglist.save_rate:]))
-                for rew in agent_rewards:
-                    final_ep_ag_rewards.append(np.mean(rew[-arglist.save_rate:]))
+                for i, rew in enumerate(agent_rewards):
+                    final_ep_ag_rewards[i].append(np.mean(rew[-arglist.save_rate:]))
+                    
+
+            if len(episode_rewards) % arglist.save_rate == 0:
+                # plot reward data
+                rew_file_name = arglist.plots_dir + arglist.exp_name + '_rewards.png'
+                agrew_file_name = arglist.plots_dir + arglist.exp_name + '_agent_rewards.png'
+
+                plt.plot(final_ep_rewards, label='Total reward')
+                plt.xlabel('training episode')
+                plt.ylabel('reward')
+                plt.legend()
+                plt.savefig(rew_file_name)
+
+                plt.clf()
+                
+                plt.xlabel('training episode')
+                plt.ylabel('agent reward')
+
+                for i in range(env.n):
+                    plt.plot(final_ep_ag_rewards[i], label='agent {}'.format(i))
+                plt.legend()
+                plt.savefig(agrew_file_name)
+                
+                plt.clf()
+                
+                
 
             # saves final episode reward for plotting training curve later
             if len(episode_rewards) > arglist.num_episodes:
@@ -230,10 +267,11 @@ def train(arglist):
                 print('...Finished total of {} episodes.'.format(len(episode_rewards)))
                 break
 
+
 def make_oracle(real_world):
     oracle_world = copy.deepcopy(real_world)
     for landmark in oracle_world.landmarks:
-        if landmark.is_emergency:
+        if landmark.is_roadblock or landmark.is_turbulence:
             oracle_world.landmarks.remove(landmark)
     return oracle_world
 
@@ -246,7 +284,7 @@ def oracle_update(real_world, oracle_world):
         oracle_agent.action.c = real_agent.action.c
     i = 0
     for real_landmark in real_world.landmarks:
-        if real_landmark.is_emergency:
+        if real_landmark.is_roadblock or real_landmark.is_turbulence:
             continue
         oracle_landmark = oracle_world.landmarks[i]
         oracle_landmark.state.p_pos = real_landmark.state.p_pos
@@ -254,5 +292,7 @@ def oracle_update(real_world, oracle_world):
         i += 1
 
 if __name__ == '__main__':
+    np.random.seed(1234567)
+    tf.random.set_seed(7654321)
     arglist = parse_args()
     train(arglist)
